@@ -27,7 +27,7 @@ import java.util.Arrays;
 // Step 1: Create GLSurfaceView for camera2 required EGL environment
 // Step 2: Create Surface from SurfaceTexture
 // Step 3: Request CameraManager service, find camera ID (1st only) and open camera device
-// Step 4: Create capture request builder for preview. Add Surface to target.
+// Step 4: Create capture request builder for preview. Add preview and encode Surface to target.
 // Step 5: Create capture session for preview
 // Step 6: Send preview request to start preview
 // Step 7: onFrameAvailable() inform texture update of preview
@@ -36,15 +36,17 @@ import java.util.Arrays;
 //
 // How to test?
 //
-// Step 1: Select "Preview" in top-right menu
+// Step 1: Select "Preview + Record" in top-right menu
 //
 
 public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvailableListener {
     private final String TAG = this.getClass().getName();
 
+    private SampleMediaEncoder mediaEncoder;
     private SampleGLRenderer glRenderer;
     private SurfaceTexture surfaceTexture;
-    private Surface surface;
+    private Surface previewSurface;
+    private Surface encodeSurface;
     private CaptureRequest.Builder previewRequestBuilder = null;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,6 +61,10 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
 
         // SurfaceTexture is the target surface of preview
         surfaceTexture = null;
+
+        //  Create encoder and MediaCodec input surface
+        mediaEncoder = new SampleMediaEncoder();
+        encodeSurface = mediaEncoder.init();
 
         // Set landscape mode only, we do not handle screen rotation in this sample
         this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
@@ -86,8 +92,9 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
             if (surfaceTexture == null) {
                 surfaceTexture = new SurfaceTexture(glRenderer.getTextureHandle());
                 surfaceTexture.setOnFrameAvailableListener(this);
-                surface = new Surface(surfaceTexture);
+                previewSurface = new Surface(surfaceTexture);
             }
+
             // Step 3: Request CameraManager service, find camera ID (1st only) and open camera device
             CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
 
@@ -108,6 +115,10 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
             } catch (CameraAccessException e) {
                 e.printStackTrace();
             }
+
+            // Start encoder for 300 frames
+            mediaEncoder.start(300);
+
             return true;
         }
 
@@ -139,18 +150,21 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
             new CameraDevice.StateCallback() {
                 @Override
                 public void onOpened(CameraDevice cameraDevice) {
-                    // Step 4: Create capture request builder for preview. Add Surface to target.
+                    // Step 4: Create capture request builder for preview.
                     Log.v(TAG, "onOpened(" + cameraDevice.getId() + ")");
                     try {
                         previewRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
                     } catch (CameraAccessException e) {
                         e.printStackTrace();
                     }
-                    previewRequestBuilder.addTarget(surface);
+                    // Add surface of GLSurafceView to preview target.
+                    previewRequestBuilder.addTarget(previewSurface);
+                    // Add surface of MediaCodec input surface to preview target.
+                    previewRequestBuilder.addTarget(encodeSurface);
 
                     // Step 5: Create capture session for preview
                     try {
-                        cameraDevice.createCaptureSession(Arrays.asList(surface), cameraCaptureSessionStateCallback, null);
+                        cameraDevice.createCaptureSession(Arrays.asList(previewSurface, encodeSurface), cameraCaptureSessionStateCallback, null);
                     } catch (CameraAccessException e) {
                         e.printStackTrace();
                     }
