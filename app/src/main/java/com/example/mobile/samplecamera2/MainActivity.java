@@ -21,6 +21,12 @@ import android.view.Surface;
 
 import java.util.Arrays;
 
+import javax.microedition.khronos.egl.EGL10;
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.egl.EGLContext;
+import javax.microedition.khronos.egl.EGLDisplay;
+import javax.microedition.khronos.egl.EGLSurface;
+
 //
 // How SampleCamera2 works?
 //
@@ -48,6 +54,12 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
     private Surface previewSurface;
     private Surface encodeSurface;
     private CaptureRequest.Builder previewRequestBuilder = null;
+    private SampleContextFactory sampleContextFactory;
+    private SampleWindowSurfaceFactory sampleWindowSurfaceFactory;
+    private int mEGLContextClientVersion = 2;
+    private EGLContext eglContext = null;
+    private EGLSurface eglSurfacePreview = null;
+    private EGLSurface eglSurfaceEncode = null;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -55,8 +67,12 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
         // Step 1: Create GLSurfaceView for camera2 required EGL environment
         GLSurfaceView glSurfaceView;
         glSurfaceView = new GLSurfaceView(this);
-        glSurfaceView.setEGLContextClientVersion(2);
+        glSurfaceView.setEGLContextClientVersion(mEGLContextClientVersion);
         glRenderer = new SampleGLRenderer();
+        sampleContextFactory = new SampleContextFactory();
+        sampleWindowSurfaceFactory = new SampleWindowSurfaceFactory();
+        glSurfaceView.setEGLContextFactory(sampleContextFactory);
+        glSurfaceView.setEGLWindowSurfaceFactory(sampleWindowSurfaceFactory);
         glSurfaceView.setRenderer(glRenderer);
 
         // SurfaceTexture is the target surface of preview
@@ -94,6 +110,9 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
                 surfaceTexture.setOnFrameAvailableListener(this);
                 previewSurface = new Surface(surfaceTexture);
             }
+
+            glRenderer.setEglContext(eglContext);
+            glRenderer.setEglSurface(eglSurfacePreview, eglSurfaceEncode);
 
             // Step 3: Request CameraManager service, find camera ID (1st only) and open camera device
             CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
@@ -157,14 +176,12 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
                     } catch (CameraAccessException e) {
                         e.printStackTrace();
                     }
-                    // Add surface of GLSurafceView to preview target.
+                    // Add surface of GLSurfaceView to preview target.
                     previewRequestBuilder.addTarget(previewSurface);
-                    // Add surface of MediaCodec input surface to preview target.
-                    previewRequestBuilder.addTarget(encodeSurface);
 
                     // Step 5: Create capture session for preview
                     try {
-                        cameraDevice.createCaptureSession(Arrays.asList(previewSurface, encodeSurface), cameraCaptureSessionStateCallback, null);
+                        cameraDevice.createCaptureSession(Arrays.asList(previewSurface), cameraCaptureSessionStateCallback, null);
                     } catch (CameraAccessException e) {
                         e.printStackTrace();
                     }
@@ -233,4 +250,61 @@ public class MainActivity extends Activity implements SurfaceTexture.OnFrameAvai
             Log.e(TAG, "onCaptureFailed(" + session + ")");
         }
     };
+
+    private class SampleContextFactory implements GLSurfaceView.EGLContextFactory {
+        private int EGL_CONTEXT_CLIENT_VERSION = 0x3098;
+
+        public EGLContext createContext(EGL10 egl, EGLDisplay display, EGLConfig config) {
+            int[] attrib_list = {EGL_CONTEXT_CLIENT_VERSION, mEGLContextClientVersion,
+                    EGL10.EGL_NONE };
+
+            eglContext = egl.eglCreateContext(display, config, EGL10.EGL_NO_CONTEXT,
+                    mEGLContextClientVersion != 0 ? attrib_list : null);
+            return eglContext;
+        }
+
+        public void destroyContext(EGL10 egl, EGLDisplay display,
+                                   EGLContext context) {
+            if (!egl.eglDestroyContext(display, context)) {
+                Log.e("DefaultContextFactory", "display:" + display + " context: " + context);
+            }
+        }
+    }
+
+    private class SampleWindowSurfaceFactory implements GLSurfaceView.EGLWindowSurfaceFactory {
+        private final String TAG = this.getClass().getName();
+        public EGLSurface createWindowSurface(EGL10 egl, EGLDisplay display,
+                                              EGLConfig config, Object nativeWindow) {
+            EGLSurface result = null;
+            try {
+                eglSurfacePreview = egl.eglCreateWindowSurface(display, config, nativeWindow, null);
+            } catch (IllegalArgumentException e) {
+                // This exception indicates that the surface flinger surface
+                // is not valid. This can happen if the surface flinger surface has
+                // been torn down, but the application has not yet been
+                // notified via SurfaceHolder.Callback.surfaceDestroyed.
+                // In theory the application should be notified first,
+                // but in practice sometimes it is not. See b/4588890
+                Log.e(TAG, "eglCreateWindowSurface (native)", e);
+            }
+            try {
+                eglSurfaceEncode = egl.eglCreateWindowSurface(display, config, encodeSurface, null);
+            } catch (IllegalArgumentException e) {
+                // This exception indicates that the surface flinger surface
+                // is not valid. This can happen if the surface flinger surface has
+                // been torn down, but the application has not yet been
+                // notified via SurfaceHolder.Callback.surfaceDestroyed.
+                // In theory the application should be notified first,
+                // but in practice sometimes it is not. See b/4588890
+                Log.e(TAG, "eglCreateWindowSurface (input surface)", e);
+            }
+            result = eglSurfacePreview;
+            return result;
+        }
+
+        public void destroySurface(EGL10 egl, EGLDisplay display,
+                                   EGLSurface surface) {
+            egl.eglDestroySurface(display, surface);
+        }
+    }
 }
